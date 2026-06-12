@@ -17,8 +17,10 @@ import numpy as np
 from extract_streamlines import (
     add_detection_arguments,
     detect_streamline_polylines,
+    make_streamline_mask,
     parse_angles,
     parse_roi,
+    remove_small_components,
     smooth_and_downsample,
 )
 
