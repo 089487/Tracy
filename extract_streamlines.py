@@ -784,24 +784,81 @@ def write_outputs(
     cv2.imwrite(str(out_dir / "streamline_map.png"), report)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Extract green wind-tunnel streamline coordinates.")
-    parser.add_argument("image", type=Path, help="Input image path")
-    parser.add_argument("--out-dir", type=Path, default=Path("streamline_output"))
-    parser.add_argument("--roi", type=parse_roi, help="Optional crop as x,y,w,h in pixel coordinates")
-    parser.add_argument(
-        "--detector",
-        choices=["hybrid", "color", "ridge", "line", "ridge_line"],
-        default="ridge",
-        help="hybrid combines color, horizontal ridge, and multi-angle line detection; ridge_line omits color blobs",
+def detect_streamline_polylines(
+    work: np.ndarray,
+    args: argparse.Namespace,
+) -> tuple[list[list[tuple[float, float]]], np.ndarray, np.ndarray]:
+    """Run the full detection pipeline on one BGR image (already ROI-cropped).
+
+    Shared by the single-image CLI and the video pipeline so both use the same
+    tracer. Returns (lines, mask, skeleton); lines are filtered and stitched
+    but not yet smoothed/downsampled.
+    """
+    if getattr(args, "tracer", "peak") == "peak":
+        response, valid = compute_ridge_response(
+            work,
+            ridge_height=args.ridge_height,
+            min_value=args.min_value,
+            saturation_threshold=args.min_saturation,
+            smooth_x=args.ridge_smooth_x,
+            smooth_y=args.ridge_smooth_y,
+            contrast_norm=args.contrast_norm,
+            min_headroom=args.min_headroom,
+        )
+        mask = ((response >= args.ridge_threshold) & valid).astype(np.uint8) * 255
+        raw_lines = trace_ridge_tracks(
+            response,
+            valid,
+            threshold=args.ridge_threshold,
+            min_spacing=args.peak_min_spacing,
+            max_gap=args.peak_max_gap,
+            y_tolerance=args.peak_y_tolerance,
+        )
+        raw_lines = [line for line in raw_lines if len(line) >= args.min_points]
+        skeleton = rasterize_polylines(work.shape[:2], raw_lines)
+    else:
+        mask = make_streamline_mask(
+            work,
+            detector=args.detector,
+            green_score_threshold=args.green_score,
+            ridge_threshold=args.ridge_threshold,
+            ridge_height=args.ridge_height,
+            line_threshold=args.line_threshold,
+            line_length=args.line_length,
+            line_angles=args.line_angles,
+            min_value=args.min_value,
+            saturation_threshold=args.min_saturation,
+            blur=args.blur,
+            close_width=args.close_width,
+        )
+        mask = remove_small_components(mask, args.min_area, args.max_area, args.max_fill_ratio)
+        skeleton = zhang_suen_thinning(mask)
+        raw_lines = extract_polylines(skeleton, args.min_points)
+
+    lines = filter_polylines(
+        raw_lines,
+        min_length=args.min_length,
+        min_horizontal_span=args.min_horizontal_span,
+        horizontal_ratio=args.horizontal_ratio,
     )
+    lines = stitch_polylines(
+        lines,
+        max_gap=args.stitch_gap,
+        y_tolerance=args.stitch_y_tolerance,
+        overlap_tolerance=args.stitch_overlap,
+        iterations=args.stitch_iterations,
+    )
+    return lines, mask, skeleton
+
+
+def add_detection_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register tracer-specific options shared by the image and video CLIs."""
     parser.add_argument(
         "--tracer",
         choices=["peak", "skeleton"],
         default="peak",
         help="peak tracks subpixel per-column ridge maxima (precise centerlines); skeleton is the legacy mask-thinning path",
     )
-    parser.add_argument("--green-score", type=float, default=35.0, help="Minimum G - 0.5*(R+B)")
     parser.add_argument("--peak-min-spacing", type=int, default=3, help="Minimum vertical pixel spacing between peaks in one column")
     parser.add_argument("--peak-max-gap", type=int, default=40, help="Columns a track may go unmatched before it is closed")
     parser.add_argument("--peak-y-tolerance", type=float, default=2.0, help="Base vertical matching tolerance for peak tracking")
@@ -814,6 +871,21 @@ def main() -> None:
         help="Normalize ridge response by local brightness headroom so bright-background regions keep their lines",
     )
     parser.add_argument("--min-headroom", type=float, default=48.0, help="Lower clamp for 255-background during contrast normalization")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Extract green wind-tunnel streamline coordinates.")
+    parser.add_argument("image", type=Path, help="Input image path")
+    parser.add_argument("--out-dir", type=Path, default=Path("streamline_output"))
+    parser.add_argument("--roi", type=parse_roi, help="Optional crop as x,y,w,h in pixel coordinates")
+    parser.add_argument(
+        "--detector",
+        choices=["hybrid", "color", "ridge", "line", "ridge_line"],
+        default="ridge",
+        help="hybrid combines color, horizontal ridge, and multi-angle line detection; ridge_line omits color blobs",
+    )
+    add_detection_arguments(parser)
+    parser.add_argument("--green-score", type=float, default=35.0, help="Minimum G - 0.5*(R+B)")
     parser.add_argument("--ridge-threshold", type=int, default=5, help="Minimum local green-channel ridge contrast")
     parser.add_argument("--ridge-height", type=int, default=31, help="Vertical window used to estimate local background")
     parser.add_argument("--line-threshold", type=float, default=3.5, help="Minimum multi-angle local line response")
@@ -861,59 +933,7 @@ def main() -> None:
         roi_offset = (x, y)
         work = image[y : y + h, x : x + w]
 
-    if args.tracer == "peak":
-        response, valid = compute_ridge_response(
-            work,
-            ridge_height=args.ridge_height,
-            min_value=args.min_value,
-            saturation_threshold=args.min_saturation,
-            smooth_x=args.ridge_smooth_x,
-            smooth_y=args.ridge_smooth_y,
-            contrast_norm=args.contrast_norm,
-            min_headroom=args.min_headroom,
-        )
-        mask = ((response >= args.ridge_threshold) & valid).astype(np.uint8) * 255
-        raw_lines = trace_ridge_tracks(
-            response,
-            valid,
-            threshold=args.ridge_threshold,
-            min_spacing=args.peak_min_spacing,
-            max_gap=args.peak_max_gap,
-            y_tolerance=args.peak_y_tolerance,
-        )
-        raw_lines = [line for line in raw_lines if len(line) >= args.min_points]
-        skeleton = rasterize_polylines(work.shape[:2], raw_lines)
-    else:
-        mask = make_streamline_mask(
-            work,
-            detector=args.detector,
-            green_score_threshold=args.green_score,
-            ridge_threshold=args.ridge_threshold,
-            ridge_height=args.ridge_height,
-            line_threshold=args.line_threshold,
-            line_length=args.line_length,
-            line_angles=args.line_angles,
-            min_value=args.min_value,
-            saturation_threshold=args.min_saturation,
-            blur=args.blur,
-            close_width=args.close_width,
-        )
-        mask = remove_small_components(mask, args.min_area, args.max_area, args.max_fill_ratio)
-        skeleton = zhang_suen_thinning(mask)
-        raw_lines = extract_polylines(skeleton, args.min_points)
-    lines = filter_polylines(
-        raw_lines,
-        min_length=args.min_length,
-        min_horizontal_span=args.min_horizontal_span,
-        horizontal_ratio=args.horizontal_ratio,
-    )
-    lines = stitch_polylines(
-        lines,
-        max_gap=args.stitch_gap,
-        y_tolerance=args.stitch_y_tolerance,
-        overlap_tolerance=args.stitch_overlap,
-        iterations=args.stitch_iterations,
-    )
+    lines, mask, skeleton = detect_streamline_polylines(work, args)
     sampled = [
         smooth_and_downsample(line, every=args.sample_every, smooth_window=args.smooth_window)
         for line in lines

@@ -15,15 +15,11 @@ import cv2
 import numpy as np
 
 from extract_streamlines import (
-    extract_polylines,
-    filter_polylines,
-    make_streamline_mask,
+    add_detection_arguments,
+    detect_streamline_polylines,
     parse_angles,
     parse_roi,
-    remove_small_components,
     smooth_and_downsample,
-    stitch_polylines,
-    zhang_suen_thinning,
 )
 
 
@@ -71,36 +67,7 @@ def process_frame(frame: np.ndarray, args: argparse.Namespace) -> list[list[tupl
         x0, y0, w, h = args.roi
         work = frame[y0 : y0 + h, x0 : x0 + w]
 
-    mask = make_streamline_mask(
-        work,
-        detector=args.detector,
-        green_score_threshold=args.green_score,
-        ridge_threshold=args.ridge_threshold,
-        ridge_height=args.ridge_height,
-        line_threshold=args.line_threshold,
-        line_length=args.line_length,
-        line_angles=args.line_angles,
-        min_value=args.min_value,
-        saturation_threshold=args.min_saturation,
-        blur=args.blur,
-        close_width=args.close_width,
-    )
-    mask = remove_small_components(mask, args.min_area, args.max_area, args.max_fill_ratio)
-    skeleton = zhang_suen_thinning(mask)
-    raw_lines = extract_polylines(skeleton, args.min_points)
-    lines = filter_polylines(
-        raw_lines,
-        min_length=args.min_length,
-        min_horizontal_span=args.min_horizontal_span,
-        horizontal_ratio=args.horizontal_ratio,
-    )
-    lines = stitch_polylines(
-        lines,
-        max_gap=args.stitch_gap,
-        y_tolerance=args.stitch_y_tolerance,
-        overlap_tolerance=args.stitch_overlap,
-        iterations=args.stitch_iterations,
-    )
+    lines, _, _ = detect_streamline_polylines(work, args)
 
     sampled = []
     for line in lines:
@@ -863,6 +830,7 @@ def main() -> None:
     parser.add_argument("--end-sec", type=float)
     parser.add_argument("--roi", type=parse_roi, help="Optional crop as x,y,w,h")
     parser.add_argument("--detector", choices=["hybrid", "color", "ridge", "line", "ridge_line"], default="ridge")
+    add_detection_arguments(parser)
     parser.add_argument("--green-score", type=float, default=35.0)
     parser.add_argument("--ridge-threshold", type=int, default=5)
     parser.add_argument("--ridge-height", type=int, default=31)
