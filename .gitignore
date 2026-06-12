@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+
+# Large raw inputs (videos are ~66 MB; keep image1.jpg tracked)
+video_inputs/
+*.MOV
+*.mov
+*.mp4
+
+# Generated analysis outputs (reproducible from scripts + inputs)
+output/
+output_right/
+image1_*/
+video_output/
+video_output_*/
+remote/

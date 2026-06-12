@@ -1,0 +1,8 @@
+row_type,model,D,d,r_out,r_in,V,rho,mu,W,d_over_D,r_out_over_D,r_in_over_D,Re,W_over_D,large_small_percent_difference
+model,large,,,,,,1.2,1.8e-05,,,,,,,
+model,small,,,,,,1.2,1.8e-05,,,,,,,
+large_small_percent_difference,d_over_D,,,,,,,,,,,,,,
+large_small_percent_difference,r_out_over_D,,,,,,,,,,,,,,
+large_small_percent_difference,r_in_over_D,,,,,,,,,,,,,,
+large_small_percent_difference,Re,,,,,,,,,,,,,,
+large_small_percent_difference,W_over_D,,,,,,,,,,,,,,

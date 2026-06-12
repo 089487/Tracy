@@ -1,0 +1,3 @@
+model,D,d,r_out,r_in,V,rho,mu,W
+large,,,,,,1.2,1.8e-5,
+small,,,,,,1.2,1.8e-5,
